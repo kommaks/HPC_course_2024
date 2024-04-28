@@ -10,6 +10,12 @@ int getNewState(int pattern, unsigned int rule) {
     return (rule >> pattern) & 1;
 }
 
+char* generate_filename(unsigned int rule) {
+    static char filename[256];
+    sprintf(filename, "output_rule_%u.txt", rule);
+    return filename;
+}
+
 int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
 
@@ -31,7 +37,6 @@ int main(int argc, char *argv[]) {
     int *local_cur = malloc((local_n + 2) * sizeof(int));
     int *local_next = malloc((local_n + 2) * sizeof(int));
 
-    // Random initialization based on rank to ensure different seeds
     srand(time(NULL) + rank);
     for (int i = 1; i <= local_n; i++) {
         local_cur[i] = rand() % 2;
@@ -45,9 +50,10 @@ int main(int argc, char *argv[]) {
 
     FILE *file;
     if (rank == 0) {
-        file = fopen("output_states.txt", "w");
+        char* filename = generate_filename(rule);
+        file = fopen(filename, "w");
         if (file == NULL) {
-            fprintf(stderr, "Failed to open file for writing.\n");
+            fprintf(stderr, "Failed to open file %s for writing.\n", filename);
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
     }
@@ -55,34 +61,29 @@ int main(int argc, char *argv[]) {
     int *global_state = malloc(N * sizeof(int));
 
     for (int step = 0; step < steps; step++) {
-        // Exchange ghost cells based on boundary type
-        if (boundaryType == 0) {  // Periodic
+        if (boundaryType == 0) {
             MPI_Sendrecv(&local_cur[1], 1, MPI_INT, left, 0,
                          &local_cur[local_n + 1], 1, MPI_INT, right, 0,
                          MPI_COMM_WORLD, &status);
             MPI_Sendrecv(&local_cur[local_n], 1, MPI_INT, right, 1,
                          &local_cur[0], 1, MPI_INT, left, 1,
                          MPI_COMM_WORLD, &status);
-        } else {  // Constant boundaries
+        } else {
             if (rank == 0) local_cur[0] = 0;
             if (rank == size - 1) local_cur[local_n + 1] = 0;
         }
 
-        // Update states
         for (int i = 1; i <= local_n; i++) {
             int pattern = (local_cur[i - 1] << 2) | (local_cur[i] << 1) | local_cur[i + 1];
             local_next[i] = getNewState(pattern, rule);
         }
 
-        // Swap pointers for the next iteration
         int *temp = local_cur;
         local_cur = local_next;
         local_next = temp;
 
-        // Gather the results at the root process
         MPI_Gather(local_cur + 1, local_n, MPI_INT, global_state, local_n, MPI_INT, 0, MPI_COMM_WORLD);
 
-        // Write the global state to file
         if (rank == 0) {
             for (int i = 0; i < N; i++) {
                 fprintf(file, "%d ", global_state[i]);
